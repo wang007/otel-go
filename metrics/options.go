@@ -1,3 +1,17 @@
+// Copyright The OpenTelemetry Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metrics
 
 import (
@@ -6,12 +20,22 @@ import (
 	"strings"
 )
 
+type CollectorType string
+
+const (
+	Noop                 = "noop"
+	PrometheusHistogram  = "prometheus_histogram"
+	PrometheusCounter    = "prometheus_counter"
+	OtelMetricsHistogram = "otel_metrics_histogram" //TODO
+	OtelMetricsCounter   = "otel_metrics_counter"   //TODO
+)
+
 var DefaultOptions = NewOptionsFromEnv()
 
 type Options struct {
-	Sampler         SamplerOptions
-	ServiceName     string
-	ServiceInstance string
+	Sampler       SamplerOptions
+	ServerInfo    ServerInfo
+	CollectorType CollectorType
 }
 
 type SamplerOptions struct {
@@ -21,6 +45,12 @@ type SamplerOptions struct {
 }
 
 func NewOptionsFromEnv() Options {
+
+	collectorType := os.Getenv("METRICS_COLLECTOR_TYPE")
+	if collectorType == "" {
+		collectorType = "prometheus_histogram"
+	}
+
 	thresholdSecStr := os.Getenv("METRICS_SAMPLER_THRESHOLD_SEC")
 	if thresholdSecStr == "" {
 		thresholdSecStr = "1"
@@ -66,13 +96,21 @@ func NewOptionsFromEnv() Options {
 	serviceName := os.Getenv("METRICS_SERVICE_NAME")
 	serviceInstance := os.Getenv("METRICS_SERVICE_INSTANCE")
 
+	serverInfo := NewServerInfoInK8sCluster()
+	if serviceName != "" {
+		serverInfo.ServiceName = serviceName
+	}
+	if serviceInstance != "" {
+		serverInfo.ServiceInstance = serviceInstance
+	}
+
 	return Options{
 		Sampler: SamplerOptions{
 			ThresholdSec:   thresholdSec,
 			OnErrorSampled: onErrorSampled,
 			RatioMap:       ratioMap,
 		},
-		ServiceName:     serviceName,
-		ServiceInstance: serviceInstance,
+		ServerInfo:    serverInfo,
+		CollectorType: CollectorType(collectorType),
 	}
 }
