@@ -1,3 +1,17 @@
+// Copyright The OpenTelemetry Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package otelhttp
 
 import (
@@ -25,15 +39,18 @@ func NewMetricsTransport(base http.RoundTripper, opts ...Option) http.RoundTripp
 	if collector == nil {
 		collector = metrics.DefaultHttpCallCollector
 	}
-	serviceName := collector.Collector.ServerInfo().ServiceName
+	rewrite := c.RewriteClientReporter
+	rewriteSent := c.RewriteClientSentServiceMark
 
-	rs := c.RewriteStatus
-	rpm := c.RewritePassiveMethod
-	rps := c.RewritePassiveService
+	serviceName := collector.Collector.ServerInfo().ServiceName
 
 	return RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if ok, _ := req.Context().Value(metrics.DisableSendActiveServiceKey).(bool); !ok {
-			req.Header.Set(metrics.ActiveServiceHeader, serviceName)
+			if rewriteSent != nil {
+				rewriteSent(req, serviceName)
+			} else {
+				req.Header.Set(metrics.ActiveServiceHeader, serviceName)
+			}
 		}
 
 		allow, _ := req.Context().Value(metrics.AllowFromURLKey).(bool)
@@ -56,16 +73,17 @@ func NewMetricsTransport(base http.RoundTripper, opts ...Option) http.RoundTripp
 		var err error
 		collector.RecordActiveRequestAndNext(func() metrics.HttpClientReporter {
 			resp, err = base.RoundTrip(req)
-			return &httpClientReporter{
+			reporter := &httpClientReporter{
 				req:            req,
 				resp:           resp,
 				passiveMethod:  passiveMethod,
-				rpm:            rpm,
 				passiveService: passiveService,
-				rps:            rps,
-				rs:             rs,
 				err:            err,
 			}
+			if rewrite != nil {
+				return rewrite(req, resp, reporter)
+			}
+			return reporter
 		})
 		return resp, err
 	})
@@ -77,10 +95,7 @@ type httpClientReporter struct {
 	req            *http.Request
 	resp           *http.Response
 	passiveMethod  string
-	rpm            RewritePassiveMethod
 	passiveService string
-	rps            RewritePassiveService
-	rs             RewriteStatus
 	err            error
 }
 
@@ -111,30 +126,13 @@ func (h *httpClientReporter) Status() string {
 	} else {
 		status = strconv.Itoa(h.resp.StatusCode)
 	}
-
-	if h.rs != nil {
-		rr := ResponseResult{
-			StatusCode: h.resp.StatusCode,
-			Header:     h.resp.Header,
-			Err:        h.err,
-		}
-		return h.rs(h.req, rr, status)
-	}
 	return status
 }
 
 func (h *httpClientReporter) Mapping() string {
-	m := h.passiveMethod
-	if h.rpm != nil {
-		m = h.rpm(h.req, m)
-	}
-	return m
+	return h.passiveMethod
 }
 
 func (h *httpClientReporter) PassiveService() string {
-	s := h.passiveService
-	if h.rps != nil {
-		s = h.rps(h.req, s)
-	}
-	return s
+	return h.passiveService
 }

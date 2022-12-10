@@ -33,9 +33,10 @@ const (
 var DefaultOptions = NewOptionsFromEnv()
 
 type Options struct {
-	Sampler       SamplerOptions
-	ServerInfo    ServerInfo
-	CollectorType CollectorType
+	SamplerOptions   SamplerOptions
+	ServerInfo       ServerInfo
+	CollectorType    CollectorType
+	HistogramBuckets []float64
 }
 
 type SamplerOptions struct {
@@ -45,7 +46,6 @@ type SamplerOptions struct {
 }
 
 func NewOptionsFromEnv() Options {
-
 	collectorType := os.Getenv("METRICS_COLLECTOR_TYPE")
 	if collectorType == "" {
 		collectorType = "prometheus_histogram"
@@ -57,7 +57,7 @@ func NewOptionsFromEnv() Options {
 	}
 	thresholdSec, err := strconv.ParseFloat(thresholdSecStr, 10)
 	if err != nil {
-		panic("METRICS_SAMPLER_THRESHOLD_SEC must be integer. err: " + err.Error())
+		panic("METRICS_SAMPLER_THRESHOLD_SEC must be float. err: " + err.Error())
 	}
 	if thresholdSec < 0 {
 		thresholdSec = 0 // always sampler
@@ -93,6 +93,22 @@ func NewOptionsFromEnv() Options {
 		}
 	}
 
+	var histogramBuckets = defBuckets
+	bucketsStr := strings.TrimSpace(os.Getenv("histogram_buckets"))
+	if bucketsStr != "" {
+		split := strings.Split(bucketsStr, ",")
+		buckets := make([]float64, 0, len(split))
+		for _, s := range split {
+			s = strings.TrimSpace(s)
+			f, err := strconv.ParseFloat(s, 10)
+			if err != nil {
+				panic("parse METRICS_HISTOGRAM_BUCKETS failed. bucket format: 0.02, 0.050, 0.100, 0.200, 0.500, 1, 2, 5. err: " + err.Error())
+			}
+			buckets = append(buckets, f)
+		}
+		histogramBuckets = buckets
+	}
+
 	serviceName := os.Getenv("METRICS_SERVICE_NAME")
 	serviceInstance := os.Getenv("METRICS_SERVICE_INSTANCE")
 
@@ -105,12 +121,13 @@ func NewOptionsFromEnv() Options {
 	}
 
 	return Options{
-		Sampler: SamplerOptions{
+		SamplerOptions: SamplerOptions{
 			ThresholdSec:   thresholdSec,
 			OnErrorSampled: onErrorSampled,
 			RatioMap:       ratioMap,
 		},
-		ServerInfo:    serverInfo,
-		CollectorType: CollectorType(collectorType),
+		ServerInfo:       serverInfo,
+		CollectorType:    CollectorType(collectorType),
+		HistogramBuckets: histogramBuckets,
 	}
 }

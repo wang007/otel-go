@@ -1,76 +1,147 @@
+// Copyright The OpenTelemetry Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package otelhttp
 
 import (
 	"github.com/wang007/otel-go/metrics"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 )
 
-type config struct {
-	Collector *metrics.HttpCallCollector
+type TracesOption = otelhttp.Option
+type Filter = otelhttp.Filter
 
-	RewriteStatus         RewriteStatus
-	RewritePassiveMethod  RewritePassiveMethod
-	RewritePassiveService RewritePassiveService
-	RewriteActiveService  RewriteActiveService
+type RewriteClientSentServiceMark func(req *http.Request, defaultServiceName string)
+type RewriteServerReporter func(req *http.Request, resp metrics.StatusCodeResponseWriter, defaultReporter metrics.HttpServerReporter) metrics.HttpServerReporter
+type RewriteClientReporter func(req *http.Request, resp *http.Response, defaultReporter metrics.HttpClientReporter) metrics.HttpClientReporter
+
+type config struct {
+	Collector                    *metrics.HttpCallCollector
+	RewriteClientReporter        RewriteClientReporter
+	RewriteClientSentServiceMark RewriteClientSentServiceMark
+	RewriteServerReporter        RewriteServerReporter
+
+	tracesOptions []TracesOption
+	service       string
 }
 
 type Option interface {
 	apply(c *config)
 }
 
-type ResponseResult struct {
-	StatusCode int
-	Header     http.Header
-	Err        error
-}
+type optionFunc func(*config)
 
-// RewritePassiveMethod for metrics http client and server
-type RewritePassiveMethod func(r *http.Request, recommendPassiveMethod string) string
-
-// RewritePassiveService for metrics http client
-type RewritePassiveService func(r *http.Request, recommendPassiveService string) string
-
-// RewriteActiveService for metrics http server
-type RewriteActiveService func(r *http.Request, recommendActiveService string) string
-
-// RewriteStatus for rewrite metrics.CallCollector status when http code is conformable.
-// eg: When http code is 200 and response body = {"code": "ERROR", "msg": "handle failed", ...}, it is actually a failure.
-// So return "500" or "ERROR" by RewriteStatus to indicate the result of failure
-// for metrics http client and server
-type RewriteStatus func(r *http.Request, resp ResponseResult, recommendStatus string) string
-
-type httpServerOptionFunc func(*config)
-
-func (o httpServerOptionFunc) apply(c *config) {
+func (o optionFunc) apply(c *config) {
 	o(c)
 }
 
+func WithService(service string) Option {
+	return optionFunc(func(c *config) {
+		c.service = service
+	})
+}
+
 func WithHttpCallCollector(collector *metrics.HttpCallCollector) Option {
-	return httpServerOptionFunc(func(config *config) {
+	return optionFunc(func(config *config) {
 		config.Collector = collector
 	})
 }
 
-func WithRewriteStatus(f RewriteStatus) Option {
-	return httpServerOptionFunc(func(config *config) {
-		config.RewriteStatus = f
+func WithRewriteServerReporter(f RewriteServerReporter) Option {
+	return optionFunc(func(config *config) {
+		config.RewriteServerReporter = f
 	})
 }
 
-func WithRewritePassiveMethod(f RewritePassiveMethod) Option {
-	return httpServerOptionFunc(func(config *config) {
-		config.RewritePassiveMethod = f
+func WithRewriteClientSentServiceMark(f RewriteClientSentServiceMark) Option {
+	return optionFunc(func(config *config) {
+		config.RewriteClientSentServiceMark = f
 	})
 }
 
-func WithRewritePassiveService(f RewritePassiveService) Option {
-	return httpServerOptionFunc(func(config *config) {
-		config.RewritePassiveService = f
+// WithTracerProvider specifies a tracer provider to use for creating a tracer.
+// If none is specified, the global provider is used.
+func WithTracerProvider(provider trace.TracerProvider) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithTracerProvider(provider))
 	})
 }
 
-func WithRewriteActiveService(f RewriteActiveService) Option {
-	return httpServerOptionFunc(func(config *config) {
-		config.RewriteActiveService = f
+// WithMeterProvider specifies a meter provider to use for creating a meter.
+// If none is specified, the global provider is used.
+func WithMeterProvider(provider metric.MeterProvider) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithMeterProvider(provider))
+	})
+}
+
+// WithPublicEndpoint configures the Handler to link the span with an incoming
+// span context. If this option is not provided, then the association is a child
+// association instead of a link.
+func WithPublicEndpoint() Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithPublicEndpoint())
+	})
+}
+
+// WithPublicEndpointFn runs with every request, and allows conditionnally
+// configuring the Handler to link the span with an incoming span context. If
+// this option is not provided or returns false, then the association is a
+// child association instead of a link.
+// Note: WithPublicEndpoint takes precedence over WithPublicEndpointFn.
+func WithPublicEndpointFn(fn func(*http.Request) bool) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithPublicEndpointFn(fn))
+	})
+}
+
+// WithPropagators configures specific propagators. If this
+// option isn't specified, then the global TextMapPropagator is used.
+func WithPropagators(ps propagation.TextMapPropagator) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithPropagators(ps))
+	})
+}
+
+// WithSpanOptions configures an additional set of
+// trace.SpanOptions, which are applied to each new span.
+func WithSpanOptions(opts ...trace.SpanStartOption) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithSpanOptions(opts...))
+	})
+}
+
+// WithFilter adds a filter to the list of filters used by the handler.
+// If any filter indicates to exclude a request then the request will not be
+// traced. All filters must allow a request to be traced for a Span to be created.
+// If no filters are provided then all requests are traced.
+// Filters will be invoked for each processed request, it is advised to make them
+// simple and fast.
+func WithFilter(f Filter) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithFilter(f))
+	})
+}
+
+// WithSpanNameFormatter takes a function that will be called on every
+// request and the returned string will become the Span Name.
+func WithSpanNameFormatter(f func(operation string, r *http.Request) string) Option {
+	return optionFunc(func(c *config) {
+		c.tracesOptions = append(c.tracesOptions, otelhttp.WithSpanNameFormatter(f))
 	})
 }

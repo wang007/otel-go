@@ -15,49 +15,61 @@
 package metrics
 
 import (
-	"log"
+	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
 )
 
-type ServerInfo struct {
-	ServiceName string
+var namespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
+var namespace string
+
+func init() {
+	ignored := os.Getenv("KUBERNETES_SERVICE_HOST")
+	if ignored == "" {
+		return
+	}
+
+	bytes, err := ioutil.ReadFile(namespaceFile)
+	if err != nil {
+		return
+	}
+	namespace = string(bytes)
+}
+
+type ServerInfo struct {
+	ServiceName     string
 	ServiceInstance string
+	Namespace       string
 }
 
 func NewServerInfo(serviceName, serviceInstance string) ServerInfo {
 	return ServerInfo{
 		ServiceName:     serviceName,
 		ServiceInstance: serviceInstance,
+		Namespace:       namespace,
 	}
 }
 
 func NewServerInfoInK8sCluster() ServerInfo {
 	podName := os.Getenv("MY_POD_NAME") // inject pod name by k8s Downward API
-	if len(podName) != 0 {
-		log.Println("get pod name from env[MY_POD_NAME], pod name: " + podName)
-	} else {
+	if podName == "" {
 		podName = os.Getenv("HOSTNAME")
-		if len(podName) != 0 {
-			log.Println("get pod name from env[HOSTNAME], pod name: " + podName)
-		}
 	}
 	if podName == "" {
 		podName = "unknown"
 	}
 
 	serviceName := os.Getenv("MY_SERVICE_NAME")
-	if len(serviceName) != 0 {
-		log.Println("get service name from env[MY_SERVICE_NAME], service name: " + serviceName)
-	} else {
+	if serviceName == "" {
 		serviceName = guessServiceName(serviceName)
 	}
-	log.Printf("pod name: %s, service name: %s\n", podName, serviceName)
+
 	return ServerInfo{
 		ServiceName:     serviceName,
 		ServiceInstance: podName,
+		Namespace:       namespace,
 	}
 }
 

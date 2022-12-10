@@ -28,7 +28,9 @@ func NewCallCollector(opt Options) CallCollector {
 	case Noop:
 		return &NoopCallCollector{}
 	case PrometheusCounter:
-		return NewPrometheusCounterCallCollector(opt, prometheus.DefaultRegisterer)
+		collector := NewPrometheusCounterCallCollector(opt)
+		prometheus.DefaultRegisterer.MustRegister(collector)
+		return collector
 	case OtelMetricsHistogram:
 		fallthrough
 	case OtelMetricsCounter:
@@ -36,13 +38,16 @@ func NewCallCollector(opt Options) CallCollector {
 	case PrometheusHistogram:
 		fallthrough
 	default:
-		return NewPrometheusHistogramCallCollector(opt, prometheus.DefaultRegisterer)
+		collector := NewPrometheusHistogramCallCollector(opt)
+		prometheus.DefaultRegisterer.MustRegister(collector)
+		return collector
 	}
 }
 
-var _ CallCollector = (*prometheusHistogramCallCollector)(nil)
+var _ CallCollector = (*PrometheusHistogramCallCollector)(nil)
+var _ prometheus.Collector = (*PrometheusHistogramCallCollector)(nil)
 
-type prometheusHistogramCallCollector struct {
+type PrometheusHistogramCallCollector struct {
 	active  *prometheus.HistogramVec
 	passive *prometheus.HistogramVec
 
@@ -55,19 +60,29 @@ type prometheusHistogramCallCollector struct {
 	defaultSampler AlwaysSampler
 }
 
-func (p *prometheusHistogramCallCollector) ServerInfo() ServerInfo {
+func (p *PrometheusHistogramCallCollector) Describe(descs chan<- *prometheus.Desc) {
+	p.active.Describe(descs)
+	p.passive.Describe(descs)
+}
+
+func (p *PrometheusHistogramCallCollector) Collect(metrics chan<- prometheus.Metric) {
+	p.active.Collect(metrics)
+	p.passive.Collect(metrics)
+}
+
+func (p *PrometheusHistogramCallCollector) ServerInfo() ServerInfo {
 	return p.serverInfo
 }
 
-func (p *prometheusHistogramCallCollector) RecordActiveRequest(passiveService, passiveMethod, methodType, status, protocol string, durationSec float64) {
+func (p *PrometheusHistogramCallCollector) RecordActiveRequest(passiveService, passiveMethod, methodType, status, protocol string, durationSec float64) {
 	p.active.WithLabelValues(passiveService, passiveMethod, methodType, status, protocol).Observe(durationSec)
 }
 
-func (p *prometheusHistogramCallCollector) RecordPassiveHandle(activeService, passiveMethod, methodType, status, protocol string, durationSec float64) {
+func (p *PrometheusHistogramCallCollector) RecordPassiveHandle(activeService, passiveMethod, methodType, status, protocol string, durationSec float64) {
 	p.passive.WithLabelValues(activeService, passiveMethod, methodType, status, protocol).Observe(durationSec)
 }
 
-func (p *prometheusHistogramCallCollector) GetSampler(key string) Sampler {
+func (p *PrometheusHistogramCallCollector) GetSampler(key string) Sampler {
 	v, ok := p.ratioMap[key]
 	if !ok {
 		return p.defaultSampler
@@ -75,13 +90,13 @@ func (p *prometheusHistogramCallCollector) GetSampler(key string) Sampler {
 	return NewSampler(p.thresholdSec, v, p.onErrorSampled)
 }
 
-func NewPrometheusHistogramCallCollector(opt Options, registerer prometheus.Registerer) CallCollector {
-	p := &prometheusHistogramCallCollector{
+func NewPrometheusHistogramCallCollector(opt Options) *PrometheusHistogramCallCollector {
+	p := &PrometheusHistogramCallCollector{
 		active: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "active_requests_duration_seconds",
 				Help:    "Histogram of request latency (seconds) of active.",
-				Buckets: defBuckets,
+				Buckets: opt.HistogramBuckets,
 			},
 			[]string{"passive_service", "passive_method", "method_type", "status", "protocol"},
 		),
@@ -89,27 +104,26 @@ func NewPrometheusHistogramCallCollector(opt Options, registerer prometheus.Regi
 			prometheus.HistogramOpts{
 				Name:    "passive_handled_duration_seconds",
 				Help:    "Histogram of response latency (seconds) of passive.",
-				Buckets: defBuckets,
+				Buckets: opt.HistogramBuckets,
 			},
-			[]string{"active_service", "passive_method", "method_type", "ret_code", "status", "protocol"},
+			[]string{"active_service", "passive_method", "method_type", "status", "protocol"},
 		),
 
 		serverInfo: opt.ServerInfo,
 
-		thresholdSec:   opt.Sampler.ThresholdSec,
-		onErrorSampled: opt.Sampler.OnErrorSampled,
-		ratioMap:       opt.Sampler.RatioMap,
+		thresholdSec:   opt.SamplerOptions.ThresholdSec,
+		onErrorSampled: opt.SamplerOptions.OnErrorSampled,
+		ratioMap:       opt.SamplerOptions.RatioMap,
 
 		defaultSampler: AlwaysSampler{},
 	}
-	registerer.MustRegister(p.active)
-	registerer.MustRegister(p.passive)
 	return p
 }
 
-var _ CallCollector = (*prometheusCounterCallCollector)(nil)
+var _ CallCollector = (*PrometheusCounterCallCollector)(nil)
+var _ prometheus.Collector = (*PrometheusCounterCallCollector)(nil)
 
-type prometheusCounterCallCollector struct {
+type PrometheusCounterCallCollector struct {
 	active  *prometheus.CounterVec
 	passive *prometheus.CounterVec
 
@@ -122,16 +136,26 @@ type prometheusCounterCallCollector struct {
 	defaultSampler AlwaysSampler
 }
 
-func (p *prometheusCounterCallCollector) RecordActiveRequest(passiveService, passiveMethod, methodType, status, protocol string, _ float64) {
+func (p *PrometheusCounterCallCollector) Describe(descs chan<- *prometheus.Desc) {
+	p.active.Describe(descs)
+	p.passive.Describe(descs)
+}
+
+func (p *PrometheusCounterCallCollector) Collect(metrics chan<- prometheus.Metric) {
+	p.active.Collect(metrics)
+	p.passive.Collect(metrics)
+}
+
+func (p *PrometheusCounterCallCollector) RecordActiveRequest(passiveService, passiveMethod, methodType, status, protocol string, _ float64) {
 	p.active.WithLabelValues(passiveService, passiveMethod, methodType, status, protocol).Inc()
 
 }
 
-func (p *prometheusCounterCallCollector) RecordPassiveHandle(activeService, passiveMethod, methodType, status, protocol string, _ float64) {
+func (p *PrometheusCounterCallCollector) RecordPassiveHandle(activeService, passiveMethod, methodType, status, protocol string, _ float64) {
 	p.passive.WithLabelValues(activeService, passiveMethod, methodType, status, protocol).Inc()
 }
 
-func (p *prometheusCounterCallCollector) GetSampler(key string) Sampler {
+func (p *PrometheusCounterCallCollector) GetSampler(key string) Sampler {
 	v, ok := p.ratioMap[key]
 	if !ok {
 		return p.defaultSampler
@@ -139,12 +163,12 @@ func (p *prometheusCounterCallCollector) GetSampler(key string) Sampler {
 	return NewSampler(p.thresholdSec, v, p.onErrorSampled)
 }
 
-func (p *prometheusCounterCallCollector) ServerInfo() ServerInfo {
+func (p *PrometheusCounterCallCollector) ServerInfo() ServerInfo {
 	return p.serverInfo
 }
 
-func NewPrometheusCounterCallCollector(opt Options, registerer prometheus.Registerer) CallCollector {
-	p := &prometheusCounterCallCollector{
+func NewPrometheusCounterCallCollector(opt Options) *PrometheusCounterCallCollector {
+	p := &PrometheusCounterCallCollector{
 		active: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "active_requests_total",
@@ -154,21 +178,19 @@ func NewPrometheusCounterCallCollector(opt Options, registerer prometheus.Regist
 		),
 		passive: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "passive_handled_duration_seconds",
+				Name: "passive_handled_total",
 				Help: "Counter of response of passive.",
 			},
-			[]string{"active_service", "passive_method", "method_type", "ret_code", "status", "protocol"},
+			[]string{"active_service", "passive_method", "method_type", "status", "protocol"},
 		),
 
 		serverInfo: opt.ServerInfo,
 
-		thresholdSec:   opt.Sampler.ThresholdSec,
-		onErrorSampled: opt.Sampler.OnErrorSampled,
-		ratioMap:       opt.Sampler.RatioMap,
+		thresholdSec:   opt.SamplerOptions.ThresholdSec,
+		onErrorSampled: opt.SamplerOptions.OnErrorSampled,
+		ratioMap:       opt.SamplerOptions.RatioMap,
 
 		defaultSampler: AlwaysSampler{},
 	}
-	registerer.MustRegister(p.active)
-	registerer.MustRegister(p.passive)
 	return p
 }

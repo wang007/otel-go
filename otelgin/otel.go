@@ -12,25 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package otelhttp
+package otelgin
 
 import (
-	"net/http"
+	"github.com/gin-gonic/gin"
+	"github.com/wang007/otel-go/metrics"
 )
 
-var DefaultClient = &http.Client{Transport: NewTransport(http.DefaultTransport)}
+func Middleware(opts ...Option) gin.HandlerFunc {
+	tm := TracesMiddleware(opts...)
 
-func NewTransport(base http.RoundTripper, opts ...Option) http.RoundTripper {
-	mt := NewMetricsTransport(base, opts...)
-	return NewTracesTransport(mt, opts...)
-}
+	c := config{}
+	for _, o := range opts {
+		o.apply(&c)
+	}
+	collector := c.httpCallCollector
+	if collector == nil {
+		collector = metrics.DefaultHttpCallCollector
+	}
 
-func NewHandler(handler http.Handler, opts ...Option) http.Handler {
-	mh := NewMetricsHttpHandler(handler, opts...)
-	return NewTracesHandler(mh, opts...)
-}
-
-func New4xxHandler(handler http.Handler, opts ...Option) http.Handler {
-	mh := NewMetrics404HttpHandler(handler, opts...)
-	return NewTracesHandler(mh, opts...)
+	return metricsMiddlewareNext(collector, c.rewriteServerReporter, func(c *gin.Context) {
+		tm(c)
+	})
 }

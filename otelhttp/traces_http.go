@@ -17,20 +17,24 @@ package otelhttp
 import (
 	"net/http"
 )
+import "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
-var DefaultClient = &http.Client{Transport: NewTransport(http.DefaultTransport)}
+// redirect to go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp
 
-func NewTransport(base http.RoundTripper, opts ...Option) http.RoundTripper {
-	mt := NewMetricsTransport(base, opts...)
-	return NewTracesTransport(mt, opts...)
+var DefaultTracesClient = otelhttp.DefaultClient
+
+func NewTracesTransport(base http.RoundTripper, opts ...Option) *otelhttp.Transport {
+	c := config{}
+	for _, o := range opts {
+		o.apply(&c)
+	}
+	return otelhttp.NewTransport(base, c.tracesOptions...)
 }
 
-func NewHandler(handler http.Handler, opts ...Option) http.Handler {
-	mh := NewMetricsHttpHandler(handler, opts...)
-	return NewTracesHandler(mh, opts...)
-}
-
-func New4xxHandler(handler http.Handler, opts ...Option) http.Handler {
-	mh := NewMetrics404HttpHandler(handler, opts...)
-	return NewTracesHandler(mh, opts...)
+func NewTracesHandler(handler http.Handler, opts ...Option) http.Handler {
+	c := config{}
+	for _, o := range opts {
+		o.apply(&c)
+	}
+	return otelhttp.NewHandler(handler, c.service, c.tracesOptions...)
 }

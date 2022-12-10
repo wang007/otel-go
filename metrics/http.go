@@ -95,7 +95,7 @@ func (h *HttpCallCollector) RecordActiveRequestAndNext(next func() HttpClientRep
 	if h.httpClientSampler.ShouldSample(durationSec, reporter.Err()) {
 		methodType := reporter.Method()
 		status := reporter.Status()
-		h.Collector.RecordActiveRequest(reporter.PassiveService(), reporter.Mapping(), methodType, status, "http", durationSec)
+		h.Collector.RecordActiveRequest(reporter.PassiveService(), reporter.Mapping(), methodType, status, "HTTP", durationSec)
 	}
 }
 

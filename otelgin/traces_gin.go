@@ -12,25 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package otelhttp
+package otelgin
 
 import (
-	"net/http"
+	"github.com/gin-gonic/gin"
+	gootelgin "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-var DefaultClient = &http.Client{Transport: NewTransport(http.DefaultTransport)}
-
-func NewTransport(base http.RoundTripper, opts ...Option) http.RoundTripper {
-	mt := NewMetricsTransport(base, opts...)
-	return NewTracesTransport(mt, opts...)
-}
-
-func NewHandler(handler http.Handler, opts ...Option) http.Handler {
-	mh := NewMetricsHttpHandler(handler, opts...)
-	return NewTracesHandler(mh, opts...)
-}
-
-func New4xxHandler(handler http.Handler, opts ...Option) http.Handler {
-	mh := NewMetrics404HttpHandler(handler, opts...)
-	return NewTracesHandler(mh, opts...)
+// TracesMiddleware redirect go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin
+func TracesMiddleware(opts ...Option) gin.HandlerFunc {
+	c := config{}
+	for _, o := range opts {
+		o.apply(&c)
+	}
+	return gootelgin.Middleware(c.service, c.tracesOptions...)
 }
